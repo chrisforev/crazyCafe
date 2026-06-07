@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Crazy Café — a wacky cooking game</title>
+  <meta name="description" content="Free browser cooking game: stack burgers, pancakes and sundaes for hungry tomatoes, toasters and skeletons before they stomp off! No download, just play." />
+  <meta name="keywords" content="browser game, free online game, cooking game, kids game, html5 game, phaser game, burger stacking game" />
+  <!-- social sharing cards (Open Graph + Twitter) -->
+  <meta property="og:title" content="Crazy Café" />
+  <meta property="og:description" content="Stack burgers and sundaes for very hungry tomatoes, toasters and skeletons. Free browser game — no download!" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://wackygames.com.au/cafe/" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Crazy Café" />
+  <meta name="twitter:description" content="Stack burgers and sundaes for very hungry tomatoes, toasters and skeletons. Free browser game — no download!" />
+  <meta name="theme-color" content="#2b1c12" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍔</text></svg>" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #2b1c12;
+      height: 100%;
+      overflow: hidden;
+      touch-action: none; /* stop scroll/zoom gestures stealing game touches */
+    }
+    /* fullscreen game container — Phaser handles fitting and centering inside it.
+       position:fixed + inset:0 tracks the real visible area on iOS Safari, where
+       100% body height goes stale when the toolbar shows/hides. */
+    #game {
+      position: fixed;
+      inset: 0;
+    }
+    canvas {
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
