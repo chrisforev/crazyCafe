@@ -18,7 +18,7 @@ import {
 } from '../defs';
 import type { IngredientKey, DishDef, CustomerKind } from '../defs';
 import { blip, ding, pickupJingle, grumble } from '../sound';
-import { saveBest } from '../storage';
+import { saveBest, saveRun, loadRun, clearRun } from '../storage';
 
 interface Customer {
   kind: CustomerKind;
@@ -75,6 +75,15 @@ export class GameScene extends Phaser.Scene {
     this.stackHeight = 0;
     this.held = null;
     this.gameEnded = false;
+
+    // continue a saved shift? (set by the menu's CONTINUE option)
+    const resume = this.registry.get('resume') === true ? loadRun() : null;
+    this.registry.set('resume', false);
+    if (resume) {
+      this.coins = resume.coins;
+      this.day = resume.day;
+      this.strikes = resume.strikes;
+    }
 
     const portrait = ARENA_W < ARENA_H;
     this.custX = ARENA_W * (portrait ? 0.26 : 0.18);
@@ -191,6 +200,14 @@ export class GameScene extends Phaser.Scene {
   // ---- day & customer flow ----
 
   private startDay() {
+    // a fresh deploy landed mid-shift? swap to it now — the shift is saved
+    // and the menu will offer CONTINUE right where we left off
+    if ((window as unknown as { __updateReady?: boolean }).__updateReady) {
+      saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+      window.location.reload();
+      return;
+    }
+    saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
     this.served = 0;
     this.stormedOff = 0;
     this.dayText.setText(`DAY ${this.day}`);
@@ -336,7 +353,7 @@ export class GameScene extends Phaser.Scene {
   // ---- the shelf & dragging ----
 
   private buildShelf(portrait: boolean) {
-    const cols = portrait ? 4 : 6;
+    const cols = portrait ? 5 : 7;
     const cellW = ARENA_W / cols;
     const startY = ARENA_H * (portrait ? 0.74 : 0.84);
     const rowH = ARENA_H * (portrait ? 0.085 : 0.075);
@@ -467,6 +484,7 @@ export class GameScene extends Phaser.Scene {
     this.coinsText.setText(`🪙 ${this.coins}`);
     this.served++;
     saveBest(this.coins, this.day);
+    saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
 
     ding();
     pickupJingle();
@@ -540,11 +558,13 @@ export class GameScene extends Phaser.Scene {
     if (this.strikes >= STRIKES_TO_CLOSE) {
       this.gameEnded = true;
       saveBest(this.coins, this.day);
+      clearRun(); // closed is closed — no continuing out of it
       this.time.delayedCall(900, () =>
         this.scene.start('gameover', { coins: this.coins, day: this.day }),
       );
       return;
     }
+    saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
     this.time.delayedCall(1000, () => this.nextCustomer());
   }
 

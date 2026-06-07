@@ -125,6 +125,31 @@ export function createTextures(scene: Phaser.Scene) {
   g.fillCircle(8, 13, 2.5);
   g.generateTexture('cherry', 26, 26);
 
+  // coffee: steaming mug
+  g.clear();
+  g.fillStyle(0xc9711a, 0.7); // steam wisps
+  g.fillEllipse(14, 4, 4, 7);
+  g.fillEllipse(22, 5, 4, 8);
+  g.fillStyle(0xe9ecef);
+  g.fillRoundedRect(4, 10, 26, 22, { tl: 3, tr: 3, bl: 8, br: 8 }); // mug
+  g.lineStyle(4, 0xe9ecef);
+  g.beginPath();
+  g.arc(32, 20, 6, -Math.PI / 2, Math.PI / 2); // handle
+  g.strokePath();
+  g.fillStyle(0x6f4e37);
+  g.fillEllipse(17, 13, 22, 6); // coffee
+  g.generateTexture('coffee', 40, 34);
+
+  // water: glass with a shine
+  g.clear();
+  g.fillStyle(0xdef3ff, 0.5);
+  g.fillRoundedRect(4, 0, 24, 32, { tl: 2, tr: 2, bl: 6, br: 6 }); // glass
+  g.fillStyle(0x4cc9f0, 0.85);
+  g.fillRoundedRect(7, 8, 18, 21, { tl: 1, tr: 1, bl: 5, br: 5 }); // water
+  g.fillStyle(0xffffff, 0.7);
+  g.fillRoundedRect(9, 10, 4, 14, 2); // shine
+  g.generateTexture('water', 32, 34);
+
   // coin (for payout sparkle)
   g.clear();
   g.fillStyle(0xffd166);

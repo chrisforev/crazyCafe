@@ -33,6 +33,8 @@ export const INGREDIENTS = {
   scoopVanilla: { label: 'VANILLA', height: 17 },
   scoopChoc: { label: 'CHOCO', height: 17 },
   cherry: { label: 'CHERRY', height: 12 },
+  coffee: { label: 'COFFEE', height: 30 },
+  water: { label: 'WATER', height: 30 },
 } as const satisfies Record<string, IngredientDef>;
 
 export type IngredientKey = keyof typeof INGREDIENTS;
@@ -60,6 +62,9 @@ export const DISHES: DishDef[] = [
     price: 16,
     fromDay: 4,
   },
+  // drinks — quick easy orders to catch your breath
+  { name: 'COFFEE', stack: ['coffee'], price: 4, fromDay: 1 },
+  { name: 'WATER', stack: ['water'], price: 2, fromDay: 1 },
 ];
 
 /** The MEGA TOMATO's order — every 5th day, big stack, big payday. */
@@ -84,7 +89,8 @@ export interface CustomerDef {
 
 export const CUSTOMERS: Record<CustomerKind, CustomerDef> = {
   tomato: { name: 'DANCING TOMATO', patienceMul: 1 },
-  toaster: { name: 'ANGRY TOASTER', patienceMul: 0.7 },
+  toaster: { name: 'ANGRY TOASTER', patienceMul: 0.7, favorites: [6] }, // loves hot coffee
+
   jelly: { name: 'WOBBLY JELLY', patienceMul: 1.1, favorites: [3, 4] }, // sweet tooth
   broccoli: { name: 'ANGRY BROCCOLI', patienceMul: 0.9, favorites: [2] }, // veggie, obviously
   sock: { name: 'SNEAKY SOCK', patienceMul: 1.2 },

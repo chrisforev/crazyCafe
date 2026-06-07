@@ -38,6 +38,9 @@ async function checkForUpdate() {
     if (!v.buildId || v.buildId === __BUILD_ID__) return;
     if (game.scene.isActive('menu') || game.scene.isActive('gameover')) {
       window.location.reload();
+    } else {
+      // mid-shift: flag it — GameScene reloads between days (run is autosaved)
+      (window as unknown as { __updateReady?: boolean }).__updateReady = true;
     }
   } catch {
     // offline or dev server — ignore

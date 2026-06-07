@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { ARENA_W, ARENA_H, CUSTOMER_KINDS } from '../defs';
 import { createTextures } from '../textures';
 import { initAudio } from '../sound';
-import { getBestCoins, getBestDay } from '../storage';
+import { getBestCoins, getBestDay, loadRun, clearRun } from '../storage';
 
 export class MenuScene extends Phaser.Scene {
   constructor() {
@@ -95,27 +95,69 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5);
     }
 
-    const start = this.add
-      .text(ARENA_W / 2, ARENA_H * 0.76, '👨‍🍳 OPEN THE CAFÉ', {
-        fontFamily: 'monospace',
-        fontSize: '30px',
-        color: '#70e000',
-        stroke: '#000000',
-        strokeThickness: 6,
-        fontStyle: 'bold',
-      })
-      .setOrigin(0.5);
-    this.tweens.add({
-      targets: start,
-      scale: 1.12,
-      duration: 450,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
-    this.input.once('pointerdown', () => {
+    const begin = (resume: boolean) => {
       initAudio();
+      if (!resume) clearRun();
+      this.registry.set('resume', resume);
       this.scene.start('game');
-    });
+    };
+
+    const save = loadRun();
+    if (save) {
+      // a shift is waiting — offer to continue it or start fresh
+      const cont = this.add
+        .text(ARENA_W / 2, ARENA_H * 0.73, `▶ CONTINUE  (DAY ${save.day} · 🪙${save.coins})`, {
+          fontFamily: 'monospace',
+          fontSize: '26px',
+          color: '#70e000',
+          stroke: '#000000',
+          strokeThickness: 6,
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true });
+      this.tweens.add({
+        targets: cont,
+        scale: 1.08,
+        duration: 450,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+      cont.on('pointerdown', () => begin(true));
+
+      const fresh = this.add
+        .text(ARENA_W / 2, ARENA_H * 0.84, '✨ NEW CAFÉ', {
+          fontFamily: 'monospace',
+          fontSize: '22px',
+          color: '#ffffff',
+          stroke: '#000000',
+          strokeThickness: 5,
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true });
+      fresh.on('pointerdown', () => begin(false));
+    } else {
+      const start = this.add
+        .text(ARENA_W / 2, ARENA_H * 0.76, '👨‍🍳 OPEN THE CAFÉ', {
+          fontFamily: 'monospace',
+          fontSize: '30px',
+          color: '#70e000',
+          stroke: '#000000',
+          strokeThickness: 6,
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5);
+      this.tweens.add({
+        targets: start,
+        scale: 1.12,
+        duration: 450,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+      this.input.once('pointerdown', () => begin(false));
+    }
   }
 }
