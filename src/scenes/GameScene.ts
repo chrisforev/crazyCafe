@@ -572,13 +572,13 @@ export class GameScene extends Phaser.Scene {
     const b = this.add
       .text(x, y, label, {
         fontFamily: 'monospace',
-        fontSize: '24px',
+        fontSize: '19px',
         color,
         stroke: '#000000',
-        strokeThickness: 5,
+        strokeThickness: 4,
         fontStyle: 'bold',
         backgroundColor: '#00000055',
-        padding: { x: 12, y: 8 },
+        padding: { x: 7, y: 4 },
       })
       .setOrigin(0.5)
       .setDepth(20)
