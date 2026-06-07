@@ -6,7 +6,9 @@ A wacky drag & stack cooking game — game #2 on [Wacky Games](https://wackygame
 
 ## How to play
 
+- **🎮 Singleplayer** or **🌐 Multiplayer co-op**: up to 4 chefs in one kitchen, building on the **same plate together** — you drop the bun, your friend drops the patty, anyone can serve. You see each other's colored cursors, and coins/strikes/days are shared.
 - A customer walks up and shows their order — a **stack** of ingredients
+- ☕💧 Coffee and water come from the **machines** beside the plate — tap to brew/fill, then drag the fresh cup over
 - **Drag** ingredients from the shelf onto the plate, in the right order, bottom to top
 - Hit **✅ SERVE** before their patience runs out — faster service = bigger tips 🪙
 - **🗑️ CLEAR** the plate if you mess up (a wrong serve makes them grumpy and costs patience)

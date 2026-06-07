@@ -22,4 +22,10 @@ Game content is data-driven from `src/defs.ts`: `INGREDIENTS` (with per-item sta
 
 `GameScene` flow: `startDay` → `nextCustomer` (walk-in tween, order bubble, patience deadline) → player drags shelf bins (dragstart spawns a floating copy; drop near the plate calls `placeIngredient`) → `serve` compares `stack` to `dish.stack` exactly → pay + tip scaled by remaining patience, or grumble + patience penalty on a wrong serve. Timeouts call `angryLeave` (strike); `STRIKES_TO_CLOSE` ends the run. One customer at a time; `customer.fed` guards double-handling.
 
-Scene flow: `MenuScene` → `GameScene` → `GameOverScene` (`{coins, day}` via scene data). Best coins/day persist in localStorage (`crazyCafe.*`, `src/storage.ts`).
+Scene flow: `MenuScene` → `GameScene` → `GameOverScene` (`{coins, day}` via scene data); multiplayer detours through `MultiplayerScene` ('mplobby'), which puts a connected `Net` in the registry as `'net'`. Best coins/day persist in localStorage (`crazyCafe.*`, `src/storage.ts`); solo shifts autosave (`crazyCafe.run`) for CONTINUE and apply pending deploys between days.
+
+## Multiplayer (co-op kitchen)
+
+Backend: `server/` — same Worker code as wackyShooter's, deployed separately as `crazycafe-mp` (own lobby; deploy with `npx wrangler deploy` from `server/`). Client: `src/net.ts`.
+
+Host-authoritative shared shift: `isSim` (solo or host) runs `startDay`/`nextCustomer`/patience timeouts/`serve(by)` and broadcasts `day`/`cust`/`stack`/`served`/`wrong`/`angry`/`over`; non-hosts mirror via shared handlers (`buildCustomer`, `applyStack`, `handleServed`/`handleWrong`/`handleAngry`/`handleOver`) and send requests (`place`/`clearReq`/`serveReq`). Everyone shares ONE plate. Joiners send `rejoin` → host replies `sync` (full state). Cursor ghosts via `pt` messages ~12Hz. Host promotion: new host resumes simulation from mirrored state. No autosave/CONTINUE in co-op; drink machines are per-client but their cups go through the same place pipeline.

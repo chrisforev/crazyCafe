@@ -16,9 +16,12 @@ import {
   customersForDay,
   WRONG_ORDER_PENALTY_MS,
 } from '../defs';
+import { PLAYER_COLORS } from '../defs';
 import type { IngredientKey, DishDef, CustomerKind } from '../defs';
 import { blip, ding, pickupJingle, grumble } from '../sound';
 import { saveBest, saveRun, loadRun, clearRun } from '../storage';
+import { Net } from '../net';
+import type { NetMsg } from '../net';
 
 interface Customer {
   kind: CustomerKind;
@@ -44,6 +47,21 @@ export class GameScene extends Phaser.Scene {
   private stackHeight = 0;
   private held: Phaser.GameObjects.Image | null = null;
   private gameEnded = false;
+
+  // co-op (null = singleplayer)
+  private net: Net | null = null;
+  private cursors = new Map<number, { dot: Phaser.GameObjects.Arc; label: Phaser.GameObjects.Text }>();
+  private rosterText!: Phaser.GameObjects.Text;
+  private nextPtSend = 0;
+
+  private get isMp(): boolean {
+    return this.net !== null;
+  }
+
+  /** True when this client simulates the café (solo, or co-op host). */
+  private get isSim(): boolean {
+    return !this.net || this.net.isHost;
+  }
 
   private coinsText!: Phaser.GameObjects.Text;
   private dayText!: Phaser.GameObjects.Text;
@@ -75,9 +93,12 @@ export class GameScene extends Phaser.Scene {
     this.stackHeight = 0;
     this.held = null;
     this.gameEnded = false;
+    this.net = (this.registry.get('net') as Net | null) ?? null;
+    this.cursors.clear();
+    this.nextPtSend = 0;
 
-    // continue a saved shift? (set by the menu's CONTINUE option)
-    const resume = this.registry.get('resume') === true ? loadRun() : null;
+    // continue a saved shift? (set by the menu's CONTINUE option; solo only)
+    const resume = !this.isMp && this.registry.get('resume') === true ? loadRun() : null;
     this.registry.set('resume', false);
     if (resume) {
       this.coins = resume.coins;
@@ -153,7 +174,17 @@ export class GameScene extends Phaser.Scene {
     this.patienceBar = this.add.graphics().setDepth(20);
     this.updateStrikes();
 
-    // 🚪 escape back to the title — the shift autosaves, CONTINUE awaits
+    // 🚪 escape back to the title — solo shifts autosave (CONTINUE awaits);
+    // co-op just leaves the kitchen
+    const leave = () => {
+      if (this.gameEnded) return;
+      if (this.isMp) {
+        this.leaveMp();
+        return;
+      }
+      saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+      this.scene.start('menu');
+    };
     const door = this.add
       .text(ARENA_W - 14, 68, '🚪', { fontSize: '28px' })
       .setOrigin(1, 0)
@@ -161,33 +192,51 @@ export class GameScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
     door.on('pointerover', () => door.setScale(1.15));
     door.on('pointerout', () => door.setScale(1));
-    door.on('pointerdown', () => {
-      if (this.gameEnded) return;
-      saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
-      this.scene.start('menu');
-    });
-    this.input.keyboard?.on('keydown-ESC', () => {
-      if (this.gameEnded) return;
-      saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
-      this.scene.start('menu');
-    });
+    door.on('pointerdown', leave);
+    this.input.keyboard?.on('keydown-ESC', leave);
 
     // buttons: clear + serve
     this.makeButton(ARENA_W * (portrait ? 0.2 : 0.3), this.plateY + (portrait ? 90 : 80), '🗑️ CLEAR', '#ff595e', () =>
-      this.clearPlate(true),
+      this.requestClear(),
     );
     this.makeButton(ARENA_W * (portrait ? 0.74 : 0.7), this.plateY + (portrait ? 90 : 80), '✅ SERVE', '#70e000', () =>
-      this.serve(),
+      this.requestServe(),
     );
 
     this.buildShelf(portrait);
+    // drinks come fresh from the machines, flanking the plate
+    this.makeStation(ARENA_W * (portrait ? 0.11 : 0.09), this.plateY - 60, 'coffeeMachine', 'coffee', 1800);
+    this.makeStation(ARENA_W * (portrait ? 0.89 : 0.91), this.plateY - 60, 'waterStation', 'water', 800);
     this.setupDrag();
 
-    this.time.delayedCall(400, () => this.startDay());
+    this.rosterText = this.add
+      .text(14, 44, '', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        stroke: '#000000',
+        strokeThickness: 3,
+        fontStyle: 'bold',
+        lineSpacing: 4,
+      })
+      .setDepth(20);
+    if (this.net) this.setupMp(this.net);
+
+    // the simulating side runs the café; co-op joiners get a 'sync' instead
+    if (this.isSim) this.time.delayedCall(400, () => this.startDay());
   }
 
   update(time: number) {
     if (this.gameEnded) return;
+
+    // co-op: share where my hand is (colored cursor ghosts)
+    if (this.isMp && time > this.nextPtSend) {
+      const p = this.input.activePointer;
+      if (p.x || p.y) {
+        this.nextPtSend = time + 80;
+        this.net!.send({ t: 'pt', x: Math.round(p.x), y: Math.round(p.y) });
+      }
+    }
+
     const c = this.customer;
     if (!c || c.fed) {
       this.patienceBar.clear();
@@ -213,22 +262,26 @@ export class GameScene extends Phaser.Scene {
       grumble();
     }
 
-    if (time > c.deadline) this.angryLeave();
+    // only the simulating side rules on walk-offs
+    if (this.isSim && time > c.deadline) this.angryLeave();
   }
 
   // ---- day & customer flow ----
 
   private startDay() {
-    // a fresh deploy landed mid-shift? swap to it now — the shift is saved
-    // and the menu will offer CONTINUE right where we left off
-    if ((window as unknown as { __updateReady?: boolean }).__updateReady) {
+    if (!this.isMp) {
+      // a fresh deploy landed mid-shift? swap to it now — the shift is saved
+      // and the menu will offer CONTINUE right where we left off
+      if ((window as unknown as { __updateReady?: boolean }).__updateReady) {
+        saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+        window.location.reload();
+        return;
+      }
       saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
-      window.location.reload();
-      return;
     }
-    saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
     this.served = 0;
     this.stormedOff = 0;
+    this.net?.send({ t: 'day', day: this.day, coins: this.coins });
     this.dayText.setText(`DAY ${this.day}`);
     this.showBanner(`DAY ${this.day} — OPEN!`, '#4cc9f0');
     ding();
@@ -241,8 +294,9 @@ export class GameScene extends Phaser.Scene {
     this.queueText.setText(`HUNGRY: ${Math.max(0, left)}`);
   }
 
+  /** Host/solo: decide who's next and what they want, then tell everyone. */
   private nextCustomer() {
-    if (this.gameEnded) return;
+    if (this.gameEnded || !this.isSim || this.customer) return;
     const total = customersForDay(this.day);
     const done = this.served + this.stormedOff;
     if (done >= total) {
@@ -265,6 +319,30 @@ export class GameScene extends Phaser.Scene {
       dish = favs.length && Math.random() < 0.5 ? Phaser.Math.RND.pick(favs) : Phaser.Math.RND.pick(menu);
     }
 
+    const dayMul = Math.max(0.55, 1 - (this.day - 1) * DAY_PATIENCE_DECAY);
+    const patienceTotal = Math.max(
+      PATIENCE_FLOOR_MS,
+      dish.stack.length * PATIENCE_PER_INGREDIENT_MS * def.patienceMul * dayMul * (mega ? 1.6 : 1),
+    );
+
+    this.net?.send({
+      t: 'cust',
+      k: CUSTOMER_KINDS.indexOf(kind),
+      d: mega ? -1 : DISHES.indexOf(dish),
+      mega: mega ? 1 : 0,
+      remain: patienceTotal,
+    });
+    this.buildCustomer(kind, dish, mega, patienceTotal, patienceTotal);
+  }
+
+  /** Everyone: walk the customer in (shared by the host and 'cust' messages). */
+  private buildCustomer(
+    kind: CustomerKind,
+    dish: DishDef,
+    mega: boolean,
+    patienceTotal: number,
+    remainMs: number,
+  ) {
     const sprite = this.add
       .image(-60, this.custY, kind)
       .setScale(mega ? 5 : 2.4)
@@ -288,19 +366,13 @@ export class GameScene extends Phaser.Scene {
       },
     });
 
-    const dayMul = Math.max(0.55, 1 - (this.day - 1) * DAY_PATIENCE_DECAY);
-    const patienceTotal = Math.max(
-      PATIENCE_FLOOR_MS,
-      dish.stack.length * PATIENCE_PER_INGREDIENT_MS * def.patienceMul * dayMul * (mega ? 1.6 : 1),
-    );
-
     this.customer = {
       kind,
       sprite,
       dish,
       bubble: this.makeOrderBubble(dish, mega),
       patienceTotal,
-      deadline: this.time.now + patienceTotal + 700, // walk-in grace
+      deadline: this.time.now + remainMs + 700, // walk-in grace
       mega,
       fed: false,
       warned: false,
@@ -372,12 +444,14 @@ export class GameScene extends Phaser.Scene {
   // ---- the shelf & dragging ----
 
   private buildShelf(portrait: boolean) {
-    const cols = portrait ? 5 : 7;
+    // coffee & water come from their machines, not the shelf
+    const shelfKeys = INGREDIENT_KEYS.filter((k) => k !== 'coffee' && k !== 'water');
+    const cols = portrait ? 4 : 6;
     const cellW = ARENA_W / cols;
     const startY = ARENA_H * (portrait ? 0.74 : 0.84);
     const rowH = ARENA_H * (portrait ? 0.085 : 0.075);
 
-    INGREDIENT_KEYS.forEach((key, i) => {
+    shelfKeys.forEach((key, i) => {
       const col = i % cols;
       const row = Math.floor(i / cols);
       const x = cellW * (col + 0.5);
@@ -405,12 +479,73 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** A tap-to-make drink machine; the finished drink lands on its tray, draggable. */
+  private makeStation(x: number, y: number, machineTex: string, product: IngredientKey, brewMs: number) {
+    const machine = this.add
+      .image(x, y, machineTex)
+      .setDepth(2)
+      .setInteractive({ useHandCursor: true });
+    this.add
+      .text(x, y - 40, INGREDIENTS[product].label, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#ffe8d6',
+        stroke: '#000000',
+        strokeThickness: 3,
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(2);
+    this.add.ellipse(x, y + 50, 44, 12, 0x000000, 0.3).setDepth(1); // tray slot
+
+    let ready: Phaser.GameObjects.Image | null = null;
+    let brewing = false;
+    machine.on('pointerdown', () => {
+      if (this.gameEnded) return;
+      if (ready || brewing) {
+        // already made / busy — wiggle the goods
+        this.tweens.add({ targets: ready ?? machine, angle: { from: -8, to: 8 }, duration: 70, yoyo: true, repeat: 3 });
+        return;
+      }
+      brewing = true;
+      blip(product === 'coffee' ? 150 : 800, 0.12, product === 'coffee' ? 'sawtooth' : 'sine', 0.05);
+      this.tweens.add({
+        targets: machine,
+        x: x + 2,
+        duration: 70,
+        yoyo: true,
+        repeat: Math.floor(brewMs / 140),
+      });
+      const drips = this.time.addEvent({
+        delay: 200,
+        repeat: Math.floor(brewMs / 200) - 1,
+        callback: () => this.burst.explode(2, x, y + 34),
+      });
+      this.time.delayedCall(brewMs, () => {
+        brewing = false;
+        drips.remove();
+        if (this.gameEnded) return;
+        ding();
+        const item = this.add.image(x, y + 44, product).setDepth(3).setScale(0);
+        this.tweens.add({ targets: item, scale: 1, duration: 220, ease: 'Back.easeOut' });
+        item.setInteractive({ draggable: true, useHandCursor: true });
+        item.setData('key', product);
+        item.setData('tray', true);
+        item.setData('onTaken', () => {
+          ready = null;
+        });
+        ready = item;
+      });
+    });
+  }
+
   private setupDrag() {
     this.input.on(
       'dragstart',
       (_p: Phaser.Input.Pointer, obj: Phaser.GameObjects.Image) => {
         const key = obj.getData('key') as IngredientKey | undefined;
         if (!key || this.gameEnded) return;
+        if (obj.getData('tray')) obj.setVisible(false); // carrying the actual cup
         this.held = this.add.image(obj.x, obj.y, key).setDepth(30).setAlpha(0.9);
         blip(500, 0.04, 'triangle', 0.04);
       },
@@ -427,9 +562,15 @@ export class GameScene extends Phaser.Scene {
         Math.abs(p.x - this.plateX) < 130 && p.y < this.plateY + 50 && p.y > this.plateY - 240;
       if (overPlate && !this.gameEnded) {
         held.destroy();
-        this.placeIngredient(key);
+        if (obj.getData('tray')) {
+          // the cup is used up — the machine can make another
+          (obj.getData('onTaken') as () => void)?.();
+          obj.destroy();
+        }
+        this.requestPlace(key);
       } else {
-        // fly back to the shelf and vanish
+        // fly back and vanish (tray drinks pop back onto their tray)
+        obj.setVisible(true);
         this.tweens.add({
           targets: held,
           x: obj.x,
@@ -440,6 +581,46 @@ export class GameScene extends Phaser.Scene {
         });
       }
     });
+  }
+
+  /** In co-op the host owns the plate: requests go through it, everyone mirrors. */
+  private requestPlace(key: IngredientKey) {
+    if (this.isSim) {
+      this.placeIngredient(key);
+      this.net?.send({ t: 'stack', list: this.stack });
+    } else {
+      this.net!.send({ t: 'place', k: key });
+    }
+  }
+
+  private requestClear() {
+    if (this.isSim) {
+      this.clearPlate(true);
+      this.net?.send({ t: 'stack', list: [] });
+    } else {
+      this.net!.send({ t: 'clearReq' });
+    }
+  }
+
+  private requestServe() {
+    if (this.stack.length === 0 && !this.isSim) {
+      this.showBanner('THE PLATE IS EMPTY!', '#ffd166');
+      return;
+    }
+    if (this.isSim) this.serve(this.net?.myId ?? 0);
+    else this.net!.send({ t: 'serveReq' });
+  }
+
+  /** Mirror the host's authoritative plate. */
+  private applyStack(list: IngredientKey[]) {
+    const extendsCurrent =
+      list.length >= this.stack.length && this.stack.every((k, i) => k === list[i]);
+    if (extendsCurrent) {
+      for (let i = this.stack.length; i < list.length; i++) this.placeIngredient(list[i]);
+    } else {
+      this.clearPlate(false);
+      for (const k of list) this.placeIngredient(k);
+    }
   }
 
   private placeIngredient(key: IngredientKey) {
@@ -473,9 +654,10 @@ export class GameScene extends Phaser.Scene {
 
   // ---- serving ----
 
-  private serve() {
+  /** Host/solo: rule on a serve attempt (by = the chef who hit SERVE). */
+  private serve(by: number) {
     const c = this.customer;
-    if (!c || c.fed || this.gameEnded) return;
+    if (!c || c.fed || this.gameEnded || !this.isSim) return;
     if (this.stack.length === 0) {
       this.showBanner('THE PLATE IS EMPTY!', '#ffd166');
       return;
@@ -487,28 +669,49 @@ export class GameScene extends Phaser.Scene {
 
     if (!correct) {
       // wrong order — they grumble and lose patience, you can fix it
-      grumble();
       c.deadline -= WRONG_ORDER_PENALTY_MS;
-      this.tweens.add({ targets: c.sprite, angle: { from: -12, to: 12 }, duration: 70, yoyo: true, repeat: 5 });
-      this.showBanner('GRRR! THAT IS NOT MY ORDER!', '#ff595e');
+      this.net?.send({ t: 'wrong', remain: Math.max(500, c.deadline - this.time.now) });
+      this.handleWrong(c.deadline - this.time.now);
       return;
     }
 
     // happy customer!
-    c.fed = true;
     const frac = Phaser.Math.Clamp((c.deadline - this.time.now) / c.patienceTotal, 0, 1);
     const tip = Math.round(c.dish.price * frac * 0.5);
     const pay = c.dish.price + tip;
     this.coins += pay;
-    this.coinsText.setText(`🪙 ${this.coins}`);
     this.served++;
-    saveBest(this.coins, this.day);
-    saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+    if (!this.isMp) {
+      saveBest(this.coins, this.day);
+      saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+    }
+    this.net?.send({ t: 'served', pay, tip, coins: this.coins, served: this.served, by });
+    this.handleServed(pay, tip, by);
+    this.time.delayedCall(900, () => this.nextCustomer());
+  }
 
+  /** Everyone: wrong-order grumbles (shared by the host and 'wrong' messages). */
+  private handleWrong(remainMs: number) {
+    const c = this.customer;
+    if (!c) return;
+    c.deadline = this.time.now + remainMs;
+    grumble();
+    this.tweens.add({ targets: c.sprite, angle: { from: -12, to: 12 }, duration: 70, yoyo: true, repeat: 5 });
+    this.showBanner('GRRR! THAT IS NOT MY ORDER!', '#ff595e');
+  }
+
+  /** Everyone: payday fireworks (shared by the host and 'served' messages). */
+  private handleServed(pay: number, tip: number, by: number) {
+    const c = this.customer;
+    this.coinsText.setText(`🪙 ${this.coins}`);
     ding();
     pickupJingle();
     this.burst.explode(18, this.plateX, this.plateY - 30);
-    this.showBanner(tip > 0 ? `+🪙${pay}  (TIP +${tip}!)` : `+🪙${pay}`, '#ffd166');
+    const chef = this.isMp ? this.net!.players.get(by)?.name : null;
+    this.showBanner(
+      `+🪙${pay}${tip > 0 ? `  (TIP +${tip}!)` : ''}${chef ? `  — ${chef}!` : ''}`,
+      '#ffd166',
+    );
     // coins fly to the counter
     for (let i = 0; i < Math.min(8, pay); i++) {
       const coin = this.add.image(this.plateX, this.plateY - 40, 'coin').setDepth(25);
@@ -524,79 +727,330 @@ export class GameScene extends Phaser.Scene {
 
     this.clearPlate(false);
     this.patienceBar.clear();
-    c.bubble.destroy();
-    this.tweens.killTweensOf(c.sprite);
-    // happy hop, then bounce out the door
-    this.tweens.add({
-      targets: c.sprite,
-      y: c.sprite.y - 30,
-      duration: 160,
-      yoyo: true,
-      ease: 'Sine.easeOut',
-      onComplete: () => {
-        this.tweens.add({
-          targets: c.sprite,
-          x: ARENA_W + 80,
-          angle: 360,
-          duration: 600,
-          onComplete: () => c.sprite.destroy(),
-        });
-      },
-    });
+    if (c) {
+      c.fed = true;
+      c.bubble.destroy();
+      this.tweens.killTweensOf(c.sprite);
+      // happy hop, then bounce out the door
+      this.tweens.add({
+        targets: c.sprite,
+        y: c.sprite.y - 30,
+        duration: 160,
+        yoyo: true,
+        ease: 'Sine.easeOut',
+        onComplete: () => {
+          this.tweens.add({
+            targets: c.sprite,
+            x: ARENA_W + 80,
+            angle: 360,
+            duration: 600,
+            onComplete: () => c.sprite.destroy(),
+          });
+        },
+      });
+    }
     this.customer = null;
     this.updateQueue();
-    this.time.delayedCall(900, () => this.nextCustomer());
   }
 
+  /** Host/solo: a customer ran out of patience. */
   private angryLeave() {
     const c = this.customer;
-    if (!c || c.fed) return;
-    c.fed = true;
+    if (!c || c.fed || !this.isSim) return;
     this.strikes++;
     this.stormedOff++;
+    this.net?.send({ t: 'angry', strikes: this.strikes, stormed: this.stormedOff });
+    this.handleAngry();
+
+    if (this.strikes >= STRIKES_TO_CLOSE) {
+      if (!this.isMp) clearRun(); // closed is closed — no continuing out of it
+      this.net?.send({ t: 'over', coins: this.coins, day: this.day });
+      this.handleOver();
+      return;
+    }
+    if (!this.isMp) saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+    this.time.delayedCall(1000, () => this.nextCustomer());
+  }
+
+  /** Everyone: the stomp-off scene (shared by the host and 'angry' messages). */
+  private handleAngry() {
+    const c = this.customer;
     this.updateStrikes();
     grumble();
     this.cameras.main.shake(250, 0.01);
-    this.showBanner(`${CUSTOMERS[c.kind].name} STOMPED OFF! ${'❌'.repeat(this.strikes)}`, '#ff595e');
-
-    c.bubble.destroy();
-    this.patienceBar.clear();
-    this.tweens.killTweensOf(c.sprite);
-    c.sprite.setTint(0xff6666);
-    this.tweens.add({
-      targets: c.sprite,
-      x: -80,
-      angle: -25,
-      duration: 500,
-      onComplete: () => c.sprite.destroy(),
-    });
+    if (c) {
+      c.fed = true;
+      this.showBanner(`${CUSTOMERS[c.kind].name} STOMPED OFF! ${'❌'.repeat(this.strikes)}`, '#ff595e');
+      c.bubble.destroy();
+      this.patienceBar.clear();
+      this.tweens.killTweensOf(c.sprite);
+      c.sprite.setTint(0xff6666);
+      this.tweens.add({
+        targets: c.sprite,
+        x: -80,
+        angle: -25,
+        duration: 500,
+        onComplete: () => c.sprite.destroy(),
+      });
+    }
     this.customer = null;
     this.clearPlate(false);
     this.updateQueue();
+  }
 
-    if (this.strikes >= STRIKES_TO_CLOSE) {
-      this.gameEnded = true;
-      saveBest(this.coins, this.day);
-      clearRun(); // closed is closed — no continuing out of it
-      this.time.delayedCall(900, () =>
-        this.scene.start('gameover', { coins: this.coins, day: this.day }),
-      );
-      return;
-    }
-    saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
-    this.time.delayedCall(1000, () => this.nextCustomer());
+  /** Everyone: three strikes — the café closes. */
+  private handleOver() {
+    this.gameEnded = true;
+    saveBest(this.coins, this.day);
+    this.time.delayedCall(900, () => {
+      this.net?.close();
+      this.registry.set('net', null);
+      this.scene.start('gameover', { coins: this.coins, day: this.day });
+    });
   }
 
   private endDay() {
     const bonus = this.day * 2;
     this.coins += bonus;
     this.coinsText.setText(`🪙 ${this.coins}`);
-    saveBest(this.coins, this.day);
+    if (!this.isMp) saveBest(this.coins, this.day);
+    this.net?.send({ t: 'banner', msg: `DAY ${this.day} COMPLETE! +🪙${bonus} BONUS`, color: '#70e000' });
     this.showBanner(`DAY ${this.day} COMPLETE! +🪙${bonus} BONUS`, '#70e000');
     pickupJingle();
     this.burst.explode(40, ARENA_W / 2, ARENA_H * 0.4);
     this.day++;
     this.time.delayedCall(2000, () => this.startDay());
+  }
+
+  // ---- co-op wiring ----
+
+  private setupMp(net: Net) {
+    net.onMessage = (msg) => this.onNet(msg);
+    net.onClosed = () => {
+      this.showBanner('CONNECTION LOST!', '#ff595e');
+      this.time.delayedCall(1500, () => this.leaveMp());
+    };
+    this.updateRoster();
+    for (const p of net.players.values()) {
+      if (p.id !== net.myId) this.ensureCursor(p.id);
+    }
+    if (net.isHost) {
+      this.time.delayedCall(600, () =>
+        this.showBanner('KITCHEN OPEN — CHEFS CAN JOIN!', '#70e000'),
+      );
+    } else {
+      // joined mid-shift: ask the host where things stand
+      net.send({ t: 'rejoin' });
+      this.time.delayedCall(600, () => this.showBanner('KITCHEN JOINED!', '#70e000'));
+    }
+  }
+
+  private leaveMp() {
+    if (this.net) {
+      this.net.onMessage = () => {};
+      this.net.onClosed = () => {};
+      this.net.close();
+      this.registry.set('net', null);
+    }
+    this.scene.start('menu');
+  }
+
+  private onNet(msg: NetMsg) {
+    switch (msg.t) {
+      case 'join': {
+        const p = this.net!.players.get(msg.from!) ?? (msg.p as { name: string });
+        this.showBanner(`👨‍🍳 ${p?.name ?? 'A CHEF'} JOINED!`, '#70e000');
+        this.updateRoster();
+        this.ensureCursor((msg.p as { id: number }).id);
+        if (this.isSim) this.sendSync();
+        break;
+      }
+      case 'leave': {
+        this.removeCursor(msg.id as number);
+        this.updateRoster();
+        break;
+      }
+      case 'host':
+        this.updateRoster();
+        if (this.net?.isHost) {
+          this.showBanner("YOU'RE THE HEAD CHEF NOW!", '#ffd166');
+          // inherit the kitchen: keep cooking from known state
+          if (!this.customer && !this.gameEnded) {
+            this.time.delayedCall(1000, () => this.nextCustomer());
+          }
+        }
+        break;
+      case 'rejoin':
+        if (this.isSim) this.sendSync();
+        break;
+      case 'sync': {
+        if (this.isSim) break;
+        this.day = msg.day as number;
+        this.coins = msg.coins as number;
+        this.strikes = msg.strikes as number;
+        this.served = msg.served as number;
+        this.stormedOff = msg.stormed as number;
+        this.dayText.setText(`DAY ${this.day}`);
+        this.coinsText.setText(`🪙 ${this.coins}`);
+        this.updateStrikes();
+        this.updateQueue();
+        this.applyStack(msg.list as IngredientKey[]);
+        const cust = msg.cust as { k: number; d: number; mega: number; total: number; remain: number } | null;
+        if (cust && !this.customer) {
+          this.buildCustomer(
+            CUSTOMER_KINDS[cust.k],
+            cust.d < 0 ? MEGA_DISH : DISHES[cust.d],
+            cust.mega === 1,
+            cust.total,
+            cust.remain,
+          );
+        }
+        break;
+      }
+      case 'day': {
+        if (this.isSim) break;
+        this.day = msg.day as number;
+        this.coins = msg.coins as number;
+        this.served = 0;
+        this.stormedOff = 0;
+        this.dayText.setText(`DAY ${this.day}`);
+        this.coinsText.setText(`🪙 ${this.coins}`);
+        this.showBanner(`DAY ${this.day} — OPEN!`, '#4cc9f0');
+        ding();
+        this.updateQueue();
+        break;
+      }
+      case 'cust':
+        if (!this.isSim && !this.customer) {
+          this.buildCustomer(
+            CUSTOMER_KINDS[msg.k as number],
+            (msg.d as number) < 0 ? MEGA_DISH : DISHES[msg.d as number],
+            msg.mega === 1,
+            msg.remain as number,
+            msg.remain as number,
+          );
+        }
+        break;
+      case 'stack':
+        if (!this.isSim) this.applyStack(msg.list as IngredientKey[]);
+        break;
+      case 'place':
+        if (this.isSim && !this.gameEnded) {
+          this.placeIngredient(msg.k as IngredientKey);
+          this.net!.send({ t: 'stack', list: this.stack });
+        }
+        break;
+      case 'clearReq':
+        if (this.isSim) {
+          this.clearPlate(true);
+          this.net!.send({ t: 'stack', list: [] });
+        }
+        break;
+      case 'serveReq':
+        if (this.isSim) this.serve(msg.from!);
+        break;
+      case 'served':
+        if (!this.isSim) {
+          this.coins = msg.coins as number;
+          this.served = msg.served as number;
+          this.handleServed(msg.pay as number, msg.tip as number, msg.by as number);
+        }
+        break;
+      case 'wrong':
+        if (!this.isSim) this.handleWrong(msg.remain as number);
+        break;
+      case 'angry':
+        if (!this.isSim) {
+          this.strikes = msg.strikes as number;
+          this.stormedOff = msg.stormed as number;
+          this.handleAngry();
+        }
+        break;
+      case 'over':
+        if (!this.isSim) {
+          this.coins = msg.coins as number;
+          this.day = msg.day as number;
+          this.handleOver();
+        }
+        break;
+      case 'banner':
+        if (!this.isSim) this.showBanner(msg.msg as string, msg.color as string);
+        break;
+      case 'pt': {
+        const cur = this.ensureCursor(msg.from!);
+        cur?.dot.setPosition(msg.x as number, msg.y as number);
+        cur?.label.setPosition(msg.x as number, (msg.y as number) + 14);
+        break;
+      }
+    }
+  }
+
+  /** Host: bring a (re)joining chef up to speed. */
+  private sendSync() {
+    const c = this.customer;
+    this.net!.send({
+      t: 'sync',
+      day: this.day,
+      coins: this.coins,
+      strikes: this.strikes,
+      served: this.served,
+      stormed: this.stormedOff,
+      list: this.stack,
+      cust:
+        c && !c.fed
+          ? {
+              k: CUSTOMER_KINDS.indexOf(c.kind),
+              d: c.mega ? -1 : DISHES.indexOf(c.dish),
+              mega: c.mega ? 1 : 0,
+              total: c.patienceTotal,
+              remain: Math.max(1000, c.deadline - this.time.now),
+            }
+          : null,
+    });
+  }
+
+  /** Everyone's names under the coin counter (👑 = head chef). */
+  private updateRoster() {
+    if (!this.net) return;
+    const lines = [...this.net.players.values()]
+      .sort((a, b) => a.id - b.id)
+      .map((p) => `${p.id === this.net!.hostId ? '👑' : '👨‍🍳'} ${p.name}${p.id === this.net!.myId ? ' (YOU)' : ''}`);
+    this.rosterText.setText(lines.join('\n')).setColor('#ffe8d6');
+  }
+
+  private ensureCursor(id: number) {
+    if (!this.net || id === this.net.myId) return null;
+    let cur = this.cursors.get(id);
+    if (!cur) {
+      const p = this.net.players.get(id);
+      if (!p) return null;
+      const color = PLAYER_COLORS[p.color]?.value ?? 0xffffff;
+      const hex = '#' + color.toString(16).padStart(6, '0');
+      cur = {
+        dot: this.add.circle(-50, -50, 7, color).setStrokeStyle(2, 0x000000).setDepth(35),
+        label: this.add
+          .text(-50, -36, p.name, {
+            fontFamily: 'monospace',
+            fontSize: '11px',
+            color: hex,
+            stroke: '#000000',
+            strokeThickness: 3,
+            fontStyle: 'bold',
+          })
+          .setOrigin(0.5, 0)
+          .setDepth(35),
+      };
+      this.cursors.set(id, cur);
+    }
+    return cur;
+  }
+
+  private removeCursor(id: number) {
+    const cur = this.cursors.get(id);
+    if (!cur) return;
+    cur.dot.destroy();
+    cur.label.destroy();
+    this.cursors.delete(id);
   }
 
   // ---- little helpers ----

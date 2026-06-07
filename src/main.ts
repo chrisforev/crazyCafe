@@ -3,6 +3,7 @@ import { ARENA_W, ARENA_H, setArenaSize } from './defs';
 import { MenuScene } from './scenes/MenuScene';
 import { GameScene } from './scenes/GameScene';
 import { GameOverScene } from './scenes/GameOverScene';
+import { MultiplayerScene } from './scenes/MultiplayerScene';
 
 // portrait devices get a tall arena instead of a letterboxed wide one
 if (window.innerHeight > window.innerWidth) {
@@ -19,7 +20,7 @@ const game = new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [MenuScene, GameScene, GameOverScene],
+  scene: [MenuScene, MultiplayerScene, GameScene, GameOverScene],
 });
 
 // handle for smoke tests / debugging

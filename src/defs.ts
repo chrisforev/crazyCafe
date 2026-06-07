@@ -12,6 +12,18 @@ export const CONFETTI_COLORS = [
   0xff595e, 0xffca3a, 0x8ac926, 0x1982c4, 0x6a4c93, 0xff9f1c, 0x4cc9f0,
 ];
 
+/** Co-op chef colors (lobby picker; the index travels over the wire). */
+export const PLAYER_COLORS: { name: string; value: number }[] = [
+  { name: 'RED', value: 0xff595e },
+  { name: 'ORANGE', value: 0xff9f1c },
+  { name: 'YELLOW', value: 0xffe135 },
+  { name: 'GREEN', value: 0x70e000 },
+  { name: 'CYAN', value: 0x4cc9f0 },
+  { name: 'BLUE', value: 0x1982c4 },
+  { name: 'PURPLE', value: 0xb27aff },
+  { name: 'PINK', value: 0xff6bd6 },
+];
+
 // ---- Ingredients (drag & stack onto the plate) ----
 
 export interface IngredientDef {

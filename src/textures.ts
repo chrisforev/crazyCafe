@@ -150,6 +150,36 @@ export function createTextures(scene: Phaser.Scene) {
   g.fillRoundedRect(9, 10, 4, 14, 2); // shine
   g.generateTexture('water', 32, 34);
 
+  // coffee machine: tap it to brew a fresh cup
+  g.clear();
+  g.fillStyle(0x3a3f47);
+  g.fillRoundedRect(0, 0, 48, 40, 6); // body
+  g.fillRoundedRect(8, 38, 32, 12, 3); // drip tray
+  g.fillStyle(0x22252a);
+  g.fillRect(16, 30, 16, 10); // spout housing
+  g.fillRect(21, 38, 6, 4); // spout
+  g.fillStyle(0x4cc9f0);
+  g.fillRoundedRect(6, 7, 20, 12, 3); // screen
+  g.fillStyle(0xff595e);
+  g.fillCircle(38, 13, 5); // big red BREW button
+  g.fillStyle(0xffffff, 0.5);
+  g.fillCircle(36.5, 11.5, 1.7);
+  g.generateTexture('coffeeMachine', 48, 52);
+
+  // water station: office-style cooler with a tap
+  g.clear();
+  g.fillStyle(0x9bd4ff, 0.8);
+  g.fillRoundedRect(8, 0, 24, 18, 5); // bottle
+  g.fillStyle(0x4cc9f0, 0.9);
+  g.fillRoundedRect(10, 6, 20, 11, 4); // water in bottle
+  g.fillStyle(0xe9ecef);
+  g.fillRoundedRect(4, 17, 32, 32, 4); // base
+  g.fillStyle(0x4cc9f0);
+  g.fillRect(16, 24, 8, 6); // tap
+  g.fillStyle(0x1982c4);
+  g.fillRect(18, 30, 4, 4); // spigot
+  g.generateTexture('waterStation', 40, 52);
+
   // coin (for payout sparkle)
   g.clear();
   g.fillStyle(0xffd166);

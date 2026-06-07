@@ -3,6 +3,7 @@ import { ARENA_W, ARENA_H, CUSTOMER_KINDS } from '../defs';
 import { createTextures } from '../textures';
 import { initAudio } from '../sound';
 import { getBestCoins, getBestDay, loadRun, clearRun } from '../storage';
+import { listRooms } from '../net';
 
 export class MenuScene extends Phaser.Scene {
   constructor() {
@@ -95,6 +96,10 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5);
     }
 
+    // back at the menu = not in a co-op kitchen; close any lingering connection
+    (this.registry.get('net') as { close?: () => void } | null)?.close?.();
+    this.registry.set('net', null);
+
     const begin = (resume: boolean) => {
       initAudio();
       if (!resume) clearRun();
@@ -102,62 +107,109 @@ export class MenuScene extends Phaser.Scene {
       this.scene.start('game');
     };
 
+    const button = (
+      y: number,
+      label: string,
+      color: string,
+      size: number,
+      onClick: () => void,
+      pulse = false,
+    ) => {
+      const b = this.add
+        .text(ARENA_W / 2, y, label, {
+          fontFamily: 'monospace',
+          fontSize: `${size}px`,
+          color,
+          stroke: '#000000',
+          strokeThickness: 6,
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true });
+      if (pulse) {
+        this.tweens.add({
+          targets: b,
+          scale: 1.08,
+          duration: 450,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        });
+      } else {
+        b.on('pointerover', () => b.setScale(1.08));
+        b.on('pointerout', () => b.setScale(1));
+      }
+      b.on('pointerdown', onClick);
+      return b;
+    };
+
+    const toLobby = () => {
+      initAudio();
+      this.scene.start('mplobby');
+    };
+
     const save = loadRun();
+    let mpY: number;
     if (save) {
       // a shift is waiting — offer to continue it or start fresh
-      const cont = this.add
-        .text(ARENA_W / 2, ARENA_H * 0.73, `▶ CONTINUE  (DAY ${save.day} · 🪙${save.coins})`, {
-          fontFamily: 'monospace',
-          fontSize: '26px',
-          color: '#70e000',
-          stroke: '#000000',
-          strokeThickness: 6,
-          fontStyle: 'bold',
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      this.tweens.add({
-        targets: cont,
-        scale: 1.08,
-        duration: 450,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut',
-      });
-      cont.on('pointerdown', () => begin(true));
-
-      const fresh = this.add
-        .text(ARENA_W / 2, ARENA_H * 0.84, '✨ NEW CAFÉ', {
-          fontFamily: 'monospace',
-          fontSize: '22px',
-          color: '#ffffff',
-          stroke: '#000000',
-          strokeThickness: 5,
-          fontStyle: 'bold',
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
-      fresh.on('pointerdown', () => begin(false));
+      button(ARENA_H * 0.7, `▶ CONTINUE  (DAY ${save.day} · 🪙${save.coins})`, '#70e000', 24, () => begin(true), true);
+      button(ARENA_H * 0.79, '🎮 SINGLEPLAYER', '#ffffff', 22, () => begin(false));
+      mpY = ARENA_H * 0.87;
+      button(mpY, '🌐 MULTIPLAYER', '#4cc9f0', 22, toLobby);
     } else {
-      const start = this.add
-        .text(ARENA_W / 2, ARENA_H * 0.76, '👨‍🍳 OPEN THE CAFÉ', {
-          fontFamily: 'monospace',
-          fontSize: '30px',
-          color: '#70e000',
-          stroke: '#000000',
-          strokeThickness: 6,
-          fontStyle: 'bold',
-        })
-        .setOrigin(0.5);
-      this.tweens.add({
-        targets: start,
-        scale: 1.12,
-        duration: 450,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut',
-      });
-      this.input.once('pointerdown', () => begin(false));
+      button(ARENA_H * 0.73, '🎮 SINGLEPLAYER', '#70e000', 30, () => begin(false), true);
+      mpY = ARENA_H * 0.84;
+      button(mpY, '🌐 MULTIPLAYER', '#4cc9f0', 26, toLobby);
     }
+    this.watchForServers(mpY);
+  }
+
+  /** If a kitchen is open, point excitedly at the MULTIPLAYER button. */
+  private watchForServers(mpY: number) {
+    const callout = this.add
+      .text(ARENA_W / 2, mpY - 52, '🎉 Quick! Get on and join! Someone has made a server!', {
+        fontFamily: 'monospace',
+        fontSize: '15px',
+        color: '#ffd166',
+        stroke: '#000000',
+        strokeThickness: 4,
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setVisible(false);
+    const arrow = this.add
+      .text(ARENA_W / 2, mpY - 30, '⬇️', { fontSize: '22px' })
+      .setOrigin(0.5)
+      .setVisible(false);
+    this.tweens.add({
+      targets: arrow,
+      y: mpY - 22,
+      duration: 350,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({
+      targets: callout,
+      scale: 1.05,
+      duration: 450,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+
+    const check = async () => {
+      try {
+        const rooms = await listRooms();
+        if (!this.scene.isActive()) return;
+        const open = rooms.some((r) => r.players > 0 && r.players < r.max);
+        callout.setVisible(open);
+        arrow.setVisible(open);
+      } catch {
+        // server list unreachable — keep quiet
+      }
+    };
+    void check();
+    this.time.addEvent({ delay: 10000, loop: true, callback: () => void check() });
   }
 }
