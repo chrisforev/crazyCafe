@@ -153,6 +153,25 @@ export class GameScene extends Phaser.Scene {
     this.patienceBar = this.add.graphics().setDepth(20);
     this.updateStrikes();
 
+    // 🚪 escape back to the title — the shift autosaves, CONTINUE awaits
+    const door = this.add
+      .text(ARENA_W - 14, 68, '🚪', { fontSize: '28px' })
+      .setOrigin(1, 0)
+      .setDepth(21)
+      .setInteractive({ useHandCursor: true });
+    door.on('pointerover', () => door.setScale(1.15));
+    door.on('pointerout', () => door.setScale(1));
+    door.on('pointerdown', () => {
+      if (this.gameEnded) return;
+      saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+      this.scene.start('menu');
+    });
+    this.input.keyboard?.on('keydown-ESC', () => {
+      if (this.gameEnded) return;
+      saveRun({ coins: this.coins, day: this.day, strikes: this.strikes });
+      this.scene.start('menu');
+    });
+
     // buttons: clear + serve
     this.makeButton(ARENA_W * (portrait ? 0.2 : 0.3), this.plateY + (portrait ? 90 : 80), '🗑️ CLEAR', '#ff595e', () =>
       this.clearPlate(true),
