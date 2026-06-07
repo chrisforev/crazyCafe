@@ -66,7 +66,7 @@ export const DISHES: DishDef[] = [
   { name: 'HOT DOG', stack: ['bunBottom', 'sausage', 'bunTop'], price: 6, fromDay: 1 },
   { name: 'BURGER', stack: ['bunBottom', 'patty', 'cheese', 'bunTop'], price: 10, fromDay: 1 },
   { name: 'VEGGIE BURGER', stack: ['bunBottom', 'lettuce', 'tomatoSlice', 'bunTop'], price: 9, fromDay: 2 },
-  { name: 'SUNDAE', stack: ['scoopVanilla', 'scoopChoc', 'cherry'], price: 8, fromDay: 2 },
+  { name: 'SUNDAE', stack: ['scoopChoc', 'cherry'], price: 8, fromDay: 2 },
   { name: 'PANCAKE TOWER', stack: ['pancake', 'pancake', 'pancake', 'syrup'], price: 12, fromDay: 3 },
   {
     name: 'DOUBLE TROUBLE',
